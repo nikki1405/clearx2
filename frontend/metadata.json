@@ -1,0 +1,9 @@
+{
+  "name": "ClearX - Eco Commerce",
+  "description": "Unified commerce platform connecting hyperlocal deals, rural produce, and artisan makers.",
+  "requestFramePermissions": [
+    "geolocation",
+    "microphone",
+    "camera"
+  ]
+}
