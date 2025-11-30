@@ -10,6 +10,7 @@ import {
 import { STORES, LOCATIONS, CATEGORIES } from './data/mock';
 import { VerticalType, Product, ChatMessage, Language, Order, CartItem } from './types';
 import { generateAssistantResponse } from './services/gemini';
+import { sendOTP, verifyOTP } from './services/firebaseAuth';
 import { StoreProvider, useStore } from './context/StoreContext';
 
 // --- Shared Components ---
@@ -146,7 +147,7 @@ const FilterBar = ({ availableCategories, onFilterChange }: { availableCategorie
 const BottomNav = () => {
   const navigate = useNavigate();
   const location = useLocation();
-  const { cart, t } = useStore();
+    const { cart, t, isAuthenticated } = useStore();
 
   const navItems = [
     { icon: <HomeIcon className="w-6 h-6" />, label: t('home'), path: "/" },
@@ -161,11 +162,18 @@ const BottomNav = () => {
       {navItems.map((item) => {
         const isActive = location.pathname === item.path;
         return (
-          <button
-            key={item.label}
-            onClick={() => navigate(item.path)}
-            className={`relative flex flex-col items-center gap-1.5 transition-colors ${isActive ? 'text-emerald-700' : 'text-gray-400'}`}
-          >
+                    <button
+                        key={item.label}
+                        onClick={() => {
+                            // Require sign-in when navigating to protected routes like Cart
+                            if (item.path === '/cart' && !isAuthenticated) {
+                                navigate('/login');
+                                return;
+                            }
+                            navigate(item.path);
+                        }}
+                        className={`relative flex flex-col items-center gap-1.5 transition-colors ${isActive ? 'text-emerald-700' : 'text-gray-400'}`}
+                    >
             {item.icon}
             {item.badge ? (
               <span className="absolute -top-1.5 -right-1 bg-red-500 text-white text-[9px] w-4 h-4 flex items-center justify-center rounded-full font-bold shadow-sm border border-white">
@@ -1251,7 +1259,9 @@ const LoginScreen = () => {
     const [otp, setOtp] = useState('');
     const [name, setName] = useState('');
     const [slideIndex, setSlideIndex] = useState(0);
-    const { login, t } = useStore();
+    const [loading, setLoading] = useState(false);
+    const [error, setError] = useState('');
+    const { login, t, showToast } = useStore();
     const navigate = useNavigate();
 
     useEffect(() => {
@@ -1262,17 +1272,44 @@ const LoginScreen = () => {
         return () => clearInterval(interval);
     }, [step]);
 
-    const handleSendOtp = () => {
-        if (phone.length === 10) setStep('otp');
-        else alert('Please enter a valid 10-digit number');
+    const handleSendOtp = async () => {
+        setError('');
+        if (phone.length !== 10) {
+            setError('Please enter a valid 10-digit number');
+            return;
+        }
+        
+        setLoading(true);
+        const result = await sendOTP(phone);
+        setLoading(false);
+        
+        if (result.success) {
+            setStep('otp');
+            showToast('OTP sent to +91' + phone, 'success');
+        } else {
+            setError(result.message);
+            showToast(result.message, 'error');
+        }
     };
 
-    const handleVerify = () => {
-        if (otp === '1234') {
-            login('+91 ' + phone, name || 'Shopper');
+    const handleVerify = async () => {
+        setError('');
+        if (otp.length !== 6) {
+            setError('Please enter a valid 6-digit OTP');
+            return;
+        }
+
+        setLoading(true);
+        const result = await verifyOTP(otp);
+        setLoading(false);
+        
+        if (result.success) {
+            login('+91' + phone, name || 'Shopper');
+            showToast('Login successful!', 'success');
             navigate('/');
         } else {
-            alert('Invalid OTP. Use 1234');
+            setError(result.message);
+            showToast(result.message, 'error');
         }
     };
 
@@ -1363,6 +1400,7 @@ const LoginScreen = () => {
                                 className="w-full bg-transparent py-4 px-4 text-lg font-bold outline-none text-gray-900"
                                 value={phone}
                                 onChange={(e) => setPhone(e.target.value.replace(/\D/g, ''))}
+                                disabled={loading}
                             />
                         </div>
                     </div>
@@ -1374,47 +1412,77 @@ const LoginScreen = () => {
                             className="w-full bg-gray-50 border border-gray-200 rounded-2xl py-4 px-4 text-sm font-medium outline-none focus:ring-2 focus:ring-emerald-500 transition-all"
                             value={name}
                             onChange={(e) => setName(e.target.value)}
+                            disabled={loading}
                         />
                     </div>
+                    {error && <div className="bg-red-500/20 text-red-100 p-3 rounded-xl text-sm font-bold">{error}</div>}
                     <button
                         onClick={handleSendOtp}
-                        className="w-full bg-emerald-600 text-white font-bold py-4 rounded-2xl shadow-lg shadow-emerald-200 active:scale-95 transition-transform mt-4 text-lg"
+                        disabled={loading}
+                        className="w-full bg-emerald-600 text-white font-bold py-4 rounded-2xl shadow-lg shadow-emerald-200 active:scale-95 transition-transform mt-4 text-lg disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
                     >
-                        {t('login_btn')}
+                        {loading ? (
+                            <>
+                                <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
+                                Sending OTP...
+                            </>
+                        ) : (
+                            t('login_btn')
+                        )}
                     </button>
+                    <div id="recaptcha-container" className="mt-4"></div>
                 </div>
             ) : (
-                <div className="space-y-8 animate-in slide-in-from-right duration-300">
+                <div className="space-y-6 animate-in slide-in-from-right duration-300">
                     <div className="text-center">
                          <p className="text-white/80 mb-1">{t('otp_sent')}</p>
                          <p className="text-xl font-bold text-white">+91 {phone}</p>
                     </div>
                     
                     <div className="relative h-20 flex items-center justify-center">
-                        <div className="flex gap-4 relative z-0 pointer-events-none">
-                            {[0, 1, 2, 3].map((i) => (
-                                <div key={i} className={`w-14 h-16 border-2 rounded-2xl flex items-center justify-center text-3xl font-bold bg-white/95 shadow-lg transition-all ${otp.length === i ? 'border-emerald-400 ring-4 ring-emerald-300 -translate-y-1' : 'border-white/40 text-gray-800'}`}>
+                        <div className="flex gap-3 relative z-0 pointer-events-none">
+                            {[0, 1, 2, 3, 4, 5].map((i) => (
+                                <div key={i} className={`w-12 h-14 border-2 rounded-xl flex items-center justify-center text-2xl font-bold bg-white/95 shadow-lg transition-all ${otp.length === i ? 'border-emerald-400 ring-4 ring-emerald-300 -translate-y-1' : 'border-white/40 text-gray-800'}`}>
                                     {otp[i] || ''}
                                 </div>
                             ))}
                         </div>
                         <input
                             type="tel"
-                            maxLength={4}
+                            maxLength={6}
                             className="absolute inset-0 w-full h-full opacity-0 cursor-pointer z-10 font-bold tracking-[1em]"
                             value={otp}
-                            onChange={(e) => setOtp(e.target.value)}
+                            onChange={(e) => setOtp(e.target.value.replace(/\D/g, ''))}
+                            disabled={loading}
                             autoFocus
                         />
                     </div>
                     
+                    {error && <div className="bg-red-500/20 text-red-100 p-3 rounded-xl text-sm font-bold text-center">{error}</div>}
+                    
                     <button
                         onClick={handleVerify}
-                        className="w-full bg-emerald-900 text-white font-bold py-4 rounded-2xl shadow-lg active:scale-95 transition-transform text-lg"
+                        disabled={loading || otp.length !== 6}
+                        className="w-full bg-emerald-600 text-white font-bold py-4 rounded-2xl shadow-lg shadow-emerald-200 active:scale-95 transition-transform text-lg disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
                     >
-                        {t('verify_btn')}
+                        {loading ? (
+                            <>
+                                <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
+                                Verifying...
+                            </>
+                        ) : (
+                            t('verify_btn')
+                        )}
                     </button>
-                    <button onClick={() => setStep('phone')} className="w-full text-sm text-white/70 font-bold hover:text-white transition-colors">
+                    <button 
+                        onClick={() => {
+                            setStep('phone');
+                            setOtp('');
+                            setError('');
+                        }}
+                        disabled={loading}
+                        className="w-full text-sm text-white/70 font-bold hover:text-white transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                    >
                         Wrong Number?
                     </button>
                 </div>
@@ -1425,10 +1493,10 @@ const LoginScreen = () => {
 };
 
 const ProductDetailScreen = () => {
-  const { id } = useParams();
-  const navigate = useNavigate();
-  const { addToCart, wishlist, toggleWishlist, initiateCheckout } = useStore();
-  const { products } = useStore();
+    const { id } = useParams();
+    const navigate = useNavigate();
+    const { addToCart, wishlist, toggleWishlist, initiateCheckout, isAuthenticated, showToast } = useStore();
+    const { products } = useStore();
   
   const product = products.find(p => p.id === id);
   if (!product) return <div>Product not found</div>;
@@ -1441,12 +1509,19 @@ const ProductDetailScreen = () => {
        <div className="relative h-96">
           <img src={product.image} alt={product.name} className="w-full h-full object-cover" />
           
-          <div className="absolute top-0 left-0 right-0 p-4 flex justify-between items-center bg-gradient-to-b from-black/30 to-transparent">
-             <button onClick={() => navigate(-1)} className="bg-white/20 backdrop-blur-md p-2.5 rounded-full hover:bg-white/40 transition-colors">
+             <div className="absolute top-0 left-0 right-0 p-4 flex justify-between items-center bg-gradient-to-b from-black/30 to-transparent">
+                 <button onClick={() => navigate(-1)} className="bg-white/20 backdrop-blur-md p-2.5 rounded-full hover:bg-white/40 transition-colors">
                 <ArrowLeftIcon className="w-6 h-6 text-white" />
              </button>
              <div className="flex gap-3">
-                 <button onClick={() => navigate('/cart')} className="bg-white/20 backdrop-blur-md p-2.5 rounded-full hover:bg-white/40 transition-colors">
+                      <button onClick={() => {
+                          if (!isAuthenticated) {
+                             showToast('Please sign in to access your cart', 'info');
+                             navigate('/login');
+                             return;
+                          }
+                          navigate('/cart');
+                      }} className="bg-white/20 backdrop-blur-md p-2.5 rounded-full hover:bg-white/40 transition-colors">
                     <ShoppingBagIcon className="w-6 h-6 text-white" />
                  </button>
              </div>
@@ -1574,12 +1649,19 @@ const ProductDetailScreen = () => {
        {/* Sticky Bottom Action */}
        <div className="fixed bottom-0 left-0 right-0 bg-white border-t border-gray-100 p-4 z-30 max-w-md mx-auto">
           <div className="flex gap-3">
-             <button 
-                onClick={() => addToCart(product)}
-                className="flex-1 bg-white text-emerald-900 border border-emerald-900 font-bold py-3.5 rounded-2xl active:scale-95 transition-transform"
-             >
-                Add to Cart
-             </button>
+                 <button 
+                     onClick={() => {
+                        if (!isAuthenticated) {
+                          showToast('Please sign in to add items to cart', 'info');
+                          navigate('/login');
+                          return;
+                        }
+                        addToCart(product);
+                     }}
+                     className="flex-1 bg-white text-emerald-900 border border-emerald-900 font-bold py-3.5 rounded-2xl active:scale-95 transition-transform"
+                 >
+                     Add to Cart
+                 </button>
              <button 
                 onClick={() => {
                     initiateCheckout([{...product, quantity: 1}]);
