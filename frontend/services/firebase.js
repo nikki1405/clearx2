@@ -1,15 +1,5 @@
 // Import the functions you need from the SDKs you need
 import { initializeApp } from "firebase/app";
-// Analytics is optional and only works in browser environments
-let getAnalytics;
-try {
-  // dynamic import to avoid SSR/build-time issues
-  // eslint-disable-next-line import/no-extraneous-dependencies
-  getAnalytics = (await import("firebase/analytics")).getAnalytics;
-} catch (e) {
-  // no-op: analytics may not be available in some build environments
-  getAnalytics = null;
-}
 
 // Firebase configuration - Using environment variables for security
 const firebaseConfig = {
@@ -22,7 +12,6 @@ const firebaseConfig = {
   measurementId: import.meta.env.VITE_FIREBASE_MEASUREMENT_ID,
 };
 
-// Helpful runtime validation for missing envs (gives clearer logs in Vercel)
 // Initialize Firebase app only when essential config is present
 let app = null;
 let analytics = null;
@@ -37,25 +26,29 @@ if (!firebaseConfigured) {
 } else {
   try {
     app = initializeApp(firebaseConfig);
-    if (
-      getAnalytics &&
-      typeof window !== "undefined" &&
-      firebaseConfig.measurementId
-    ) {
-      try {
-        analytics = getAnalytics(app);
-      } catch (err) {
-        console.warn(
-          "Firebase analytics failed to initialize:",
-          err?.message || err
-        );
-      }
-    }
+    // Analytics will be initialized lazily on first use to avoid build-time issues
   } catch (err) {
     console.error("Failed to initialize Firebase app:", err?.message || err);
     app = null;
-    analytics = null;
   }
 }
 
-export { app, analytics, firebaseConfigured };
+// Lazy-load analytics on first use (avoids top-level await in build)
+async function initializeAnalytics() {
+  if (analytics || !app || !firebaseConfig.measurementId) {
+    return analytics;
+  }
+  try {
+    const { getAnalytics } = await import("firebase/analytics");
+    analytics = getAnalytics(app);
+    return analytics;
+  } catch (err) {
+    console.warn(
+      "Firebase analytics failed to initialize:",
+      err?.message || err
+    );
+    return null;
+  }
+}
+
+export { app, firebaseConfigured, initializeAnalytics };
