@@ -6,7 +6,7 @@ import {
   onAuthStateChanged,
   User 
 } from 'firebase/auth';
-import { app } from './firebase.js';
+import { app, firebaseConfigured } from './firebase.js';
 
 declare global {
   interface Window {
@@ -15,17 +15,30 @@ declare global {
   }
 }
 
-// Initialize auth with app check
-export const auth = initializeAuth(app, {
-  persistence: [],
-});
+// If Firebase isn't configured on the host (e.g., missing envs on Vercel),
+// export safe fallbacks so the app doesn't crash.
+let auth: any = null;
+if (firebaseConfigured && app) {
+  try {
+    auth = initializeAuth(app, { persistence: [] });
+  } catch (err) {
+    console.warn('Failed to initialize Firebase Auth:', err?.message || err);
+    auth = null;
+  }
+} else {
+  console.warn('Firebase Auth not initialized because Firebase is not configured.');
+}
 
 // Setup reCAPTCHA verifier
 export const setupRecaptcha = () => {
+  if (!auth) {
+    console.warn('setupRecaptcha called but Firebase auth is not available.');
+    return;
+  }
   try {
     window.recaptchaVerifier = new RecaptchaVerifier(auth, 'recaptcha-container', {
-      'size': 'invisible',
-      'callback': (response: any) => {
+      size: 'invisible',
+      callback: (response: any) => {
         console.log('reCAPTCHA verified:', response);
       },
       'expired-callback': () => {
@@ -40,6 +53,7 @@ export const setupRecaptcha = () => {
 // Send OTP to phone number
 export const sendOTP = async (phoneNumber: string) => {
   try {
+    if (!auth) return { success: false, message: 'Firebase not configured. OTP unavailable.' };
     setupRecaptcha();
     const phoneWithCountry = phoneNumber.startsWith('+') ? phoneNumber : `+91${phoneNumber}`;
     
@@ -61,6 +75,7 @@ export const sendOTP = async (phoneNumber: string) => {
 // Verify OTP
 export const verifyOTP = async (otp: string) => {
   try {
+    if (!auth) return { success: false, message: 'Firebase not configured. OTP verification unavailable.' };
     const confirmationResult = window.confirmationResult;
     
     if (!confirmationResult) {
@@ -94,6 +109,7 @@ export const verifyOTP = async (otp: string) => {
 // Logout user
 export const logoutUser = async () => {
   try {
+    if (!auth) return { success: false, message: 'Firebase not configured.' };
     await signOut(auth);
     return { success: true };
   } catch (error: any) {
@@ -104,10 +120,15 @@ export const logoutUser = async () => {
 
 // Monitor auth state changes
 export const onAuthChange = (callback: (user: User | null) => void) => {
+  if (!auth) {
+    // No-op: immediately call with null user
+    callback(null);
+    return () => {};
+  }
   return onAuthStateChanged(auth, callback);
 };
 
 // Get current user
 export const getCurrentUser = () => {
-  return auth.currentUser;
+  return auth ? auth.currentUser : null;
 };

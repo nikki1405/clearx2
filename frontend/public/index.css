@@ -1,0 +1,10 @@
+/* Minimal placeholder index.css to avoid 404 on deployments.
+   Add global styles here if needed. */
+
+:root {
+  --bg: #f8fafc;
+}
+
+body {
+  background: var(--bg);
+}

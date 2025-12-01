@@ -1,6 +1,15 @@
 // Import the functions you need from the SDKs you need
 import { initializeApp } from "firebase/app";
-import { getAnalytics } from "firebase/analytics";
+// Analytics is optional and only works in browser environments
+let getAnalytics;
+try {
+  // dynamic import to avoid SSR/build-time issues
+  // eslint-disable-next-line import/no-extraneous-dependencies
+  getAnalytics = (await import("firebase/analytics")).getAnalytics;
+} catch (e) {
+  // no-op: analytics may not be available in some build environments
+  getAnalytics = null;
+}
 
 // Firebase configuration - Using environment variables for security
 const firebaseConfig = {
@@ -13,8 +22,40 @@ const firebaseConfig = {
   measurementId: import.meta.env.VITE_FIREBASE_MEASUREMENT_ID,
 };
 
-// Initialize Firebase
-const app = initializeApp(firebaseConfig);
-const analytics = getAnalytics(app);
+// Helpful runtime validation for missing envs (gives clearer logs in Vercel)
+// Initialize Firebase app only when essential config is present
+let app = null;
+let analytics = null;
+const firebaseConfigured = Boolean(
+  firebaseConfig.projectId && firebaseConfig.apiKey && firebaseConfig.appId
+);
 
-export { app, analytics };
+if (!firebaseConfigured) {
+  console.warn(
+    "Firebase not configured: missing VITE_FIREBASE_* env vars. Firebase features will be disabled."
+  );
+} else {
+  try {
+    app = initializeApp(firebaseConfig);
+    if (
+      getAnalytics &&
+      typeof window !== "undefined" &&
+      firebaseConfig.measurementId
+    ) {
+      try {
+        analytics = getAnalytics(app);
+      } catch (err) {
+        console.warn(
+          "Firebase analytics failed to initialize:",
+          err?.message || err
+        );
+      }
+    }
+  } catch (err) {
+    console.error("Failed to initialize Firebase app:", err?.message || err);
+    app = null;
+    analytics = null;
+  }
+}
+
+export { app, analytics, firebaseConfigured };
